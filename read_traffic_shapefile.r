@@ -10,7 +10,7 @@ library(data.table)
 library(sf)
 library(USAboundaries)
 library(scales)
-setwd("~/how_we_live")
+setwd("~/how_we_live/shapefiles")
 list.files()
 
 setwd('AADT2016')
@@ -23,6 +23,18 @@ traffic_shapefile = st_read(dsn = "AADT2016")
 traffic_shapefile$ahead_aadt = as.numeric(as.character(traffic_shapefile$Ahead_AADT))
 plot(traffic_shapefile)
 
+
+quintiles = quantile(traffic_shapefile$ahead_aadt, probs = c(0, .25, 0.5, 0.75, 1), na.rm = T)
+quartiles_pretty = paste(lag(comma(quintiles)), '-', comma(quintiles)) %>% tail(4)
+traffic_shapefile$traffic_quartile = cut(traffic_shapefile$ahead_aadt, breaks = quintiles, include.lowest = T, right = F, labels = quartiles_pretty, ordered_result = T)
+
+
+setwd('..')
+HSR_Route_shapefile = st_read(dsn = 'HSR_Route_web')
+plot(HSR_Route_shapefile)
+
+setwd('..')
+
 ns_routes = filter(traffic_shapefile, Route %in% c(5, 99, 101))
 plot(ns_routes)
 
@@ -34,18 +46,6 @@ plot(la_to_san_jose)
 
 head(traffic_shapefile)
 
-
-# extract polygon data and update file
-# polygon_data <- 
-#   county_shapefiles@data %>%
-#   mutate(
-#     polygon_center_lon = INTPTLON %>% as.character() %>% as.numeric(),
-#     polygon_center_lat = INTPTLAT %>% as.character() %>% as.numeric()
-#   ) %>%
-#   data.table(key = "GEOID")
-
-# county_shapefiles_df <- 
-#   fortify(la_to_san_jose, region = "GEOID")
 
 ggplot(ns_routes, aes(Lon_S_or_W, Lat_S_or_W)) +
   geom_point(aes(color = as.numeric(as.character(Ahead_AADT)))) + 
@@ -63,8 +63,6 @@ us_cities = us_cities()
 us_states = us_states()
 california = filter(us_states, name == 'California')
 
-us_cities_fortified$geometry %>% class()
-
 california_cities = filter(us_cities, state_abbr == 'CA')
 big_ca_cities = filter(us_cities, state_abbr == 'CA') %>% arrange(-population) %>% head(5)
 
@@ -74,12 +72,8 @@ ggplot() +
   geom_sf_label(data = big_ca_cities, aes(label = city)) +
   scale_colour_gradient(low = 'white', high = 'orange')
 
-quintiles = quantile(traffic_shapefile$ahead_aadt, probs = c(0, .25, 0.5, 0.75, 1), na.rm = T)
-quartiles_pretty = paste(lag(comma(quintiles)), '-', comma(quintiles)) %>% tail(4)
-traffic_shapefile$traffic_quartile = cut(traffic_shapefile$ahead_aadt, breaks = quintiles, include.lowest = T, right = F, labels = quartiles_pretty, ordered_result = T)
-
 ca_traffic_plot = ggplot() + 
-  geom_sf(data = california, aes(), fill = 'black', size = 1) +
+  geom_sf(data = california, aes(), fill = 'black', colour = 'black') +
   geom_sf(data = traffic_shapefile %>% filter(!is.na(traffic_quintile)), aes(colour = traffic_quartile, fill = traffic_quartile)) +
   scale_colour_hue(name = 'Average Daily Traffic') +
   scale_fill_hue(name = 'Average Daily Traffic') + 
@@ -87,5 +81,13 @@ ca_traffic_plot = ggplot() +
 
 ggsave('ca_traffic.png', plot = ca_traffic_plot, height = 8, width = 8, units = 'in', dpi = 400)
 
+ca_traffic_hsr = ggplot() + 
+  geom_sf(data = california, aes(), fill = 'black', colour = 'black') +
+  geom_sf(data = traffic_shapefile %>% filter(!is.na(traffic_quartile)), aes(colour = traffic_quartile, fill = traffic_quartile)) +
+  geom_sf(data = HSR_Route_shapefile, aes(), colour = 'white', size = 1) + 
+  scale_colour_hue(name = 'Average Daily Traffic') +
+  scale_fill_hue(name = 'Average Daily Traffic') + 
+  labs(title = 'CA Car Traffic vs. High Speed Rail Route', subtitle = '2016', x = '\nTaylor G. White\nSource: California Department of Transportation')
 
-sum(is.na(traffic_shapefile$traffic_quintile))
+
+ggsave('ca_traffic_hsr.png', plot = ca_traffic_hsr, height = 8, width = 8, units = 'in', dpi = 400)
