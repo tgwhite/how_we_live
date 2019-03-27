@@ -11,6 +11,7 @@
 
 ## Traffic data
 
+* [CA Traffic Models](http://www.dot.ca.gov/hq/tpp/offices/omsp/statewide_modeling/cstdm_trip_tables.html)
 * [Uber movement](https://movement.uber.com/?lang=en-US)
 * [California traffic census](http://www.dot.ca.gov/trafficops/census/)
 
