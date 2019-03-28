@@ -12,6 +12,33 @@ library(USAboundaries)
 library(scales)
 library(tmap)
 library(readxl)
+library(tigris)
+library(raster)
+
+selected_CRS = 4269
+
+## get leg districts from tigris
+upper_ca_house_districts = state_legislative_districts('CA', 'upper') 
+low_ca_house_districts = state_legislative_districts('CA', 'lower')
+
+# find intersections, bind multiple polygons
+
+# b = over(low_ca_house_districts[1,], upper_ca_house_districts)
+# a = subset(upper_ca_house_districts, GEOID == b$GEOID)
+# d=do.call(bind, list(low_ca_house_districts[1,], a))
+# dd = st_as_sf(d)
+
+# 
+# ggplot() + 
+#   geom_sf(data = dd, aes(fill = NAMELSAD), alpha = 0.3)
+
+
+# convert objects to sf, convert their coordinate reference system
+low_ca_house_districts = st_as_sf(low_ca_house_districts) %>% st_set_crs(selected_CRS)
+
+# transform 
+# HSR_Route_shapefile = st_transform(HSR_Route_shapefile, selected_CRS)
+leg_districts_in_hsr_route = st_intersection(HSR_Route_shapefile, low_ca_house_districts)
 
 setwd('~/how_we_live/data')
 list.files()
@@ -20,41 +47,41 @@ california_commutes = filter(county_to_county_commutes, residence_state == 'Cali
 
 # by county, compute how many go to los angeles, and how many to san francisco 
 sf_la_fips = filter(ca_counties, name %in% c('San Francisco', 'Los Angeles'))
-sf_la_fips
-head(county_to_county_commutes)
 
-
-los_angeles_sf_commutes = inner_join(
-  california_commutes %>% 
-    mutate(workplace_state_fips_country_code = as.numeric(workplace_state_fips_country_code),
-           workplace_county_fips = as.numeric(workplace_county_fips),
-           residence_county_fips = as.numeric(residence_fips),
-           residence_state_fips = as.numeric(residence_state_fips)
-           ), 
-  sf_la_fips %>% 
-    as.data.frame() %>% 
-    select(-geometry) %>%
-    mutate(statefp = as.numeric(statefp), countyfp = as.numeric(countyfp)), 
-               by = c('workplace_state_fips_country_code' = 'statefp', 'workplace_county_fips' = 'countyfp'))
-
-formatted_counties = 
-  ca_counties %>% mutate(statefp = as.numeric(statefp), countyfp = as.numeric(countyfp)) %>% as.data.frame() %>% select(-geometry) %>%
-  select(statefp, countyfp, residence_county_name = name) %>% 
-  mutate(statefp = as.numeric(statefp), countyfp = as.numeric(countyfp))
-
-los_angeles_sf_commutes = inner_join(los_angeles_sf_commutes, formatted_counties, by = c('residence_state_fips' = 'statefp', 'residence_county_fips' = 'countyfp'))
-d
-d$residence_county_name %>% table()  
-
-
-
-head(los_angeles_sf_commutes %>% as.data.frame())
-dim(los_angeles_sf_commutes)
-table(los_angeles_sf_commutes$residence_fips)
-table(los_angeles_sf_commutes$residence_county_name)
-a = ca_counties %>% mutate(statefp = as.numeric(statefp), countyfp = as.numeric(countyfp)) %>% as.data.frame() %>% select(-geometry) %>%
-  select(statefp, countyfp, residence_county_name = name)
-str(a)
+# head(county_to_county_commutes)
+# 
+# 
+# los_angeles_sf_commutes = inner_join(
+#   california_commutes %>% 
+#     mutate(workplace_state_fips_country_code = as.numeric(workplace_state_fips_country_code),
+#            workplace_county_fips = as.numeric(workplace_county_fips),
+#            residence_county_fips = as.numeric(residence_fips),
+#            residence_state_fips = as.numeric(residence_state_fips)
+#            ), 
+#   sf_la_fips %>% 
+#     as.data.frame() %>% 
+#     select(-geometry) %>%
+#     mutate(statefp = as.numeric(statefp), countyfp = as.numeric(countyfp)), 
+#                by = c('workplace_state_fips_country_code' = 'statefp', 'workplace_county_fips' = 'countyfp'))
+# 
+# formatted_counties = 
+#   ca_counties %>% mutate(statefp = as.numeric(statefp), countyfp = as.numeric(countyfp)) %>% as.data.frame() %>% select(-geometry) %>%
+#   select(statefp, countyfp, residence_county_name = name) %>% 
+#   mutate(statefp = as.numeric(statefp), countyfp = as.numeric(countyfp))
+# 
+# los_angeles_sf_commutes = inner_join(los_angeles_sf_commutes, formatted_counties, by = c('residence_state_fips' = 'statefp', 'residence_county_fips' = 'countyfp'))
+# d
+# d$residence_county_name %>% table()  
+# 
+# 
+# 
+# head(los_angeles_sf_commutes %>% as.data.frame())
+# dim(los_angeles_sf_commutes)
+# table(los_angeles_sf_commutes$residence_fips)
+# table(los_angeles_sf_commutes$residence_county_name)
+# a = ca_counties %>% mutate(statefp = as.numeric(statefp), countyfp = as.numeric(countyfp)) %>% as.data.frame() %>% select(-geometry) %>%
+#   select(statefp, countyfp, residence_county_name = name)
+# str(a)
 
 setwd("~/how_we_live/shapefiles")
 
@@ -84,10 +111,14 @@ la_to_san_jose = filter(traffic_shapefile, Route %in% c(5, 152, 280))
 us_cities_shapefile = us_cities()
 us_states_shapefile = us_states()
 us_counties_shapefile = us_counties()
+head(us_counties_shapefile)
 
 california = filter(us_states_shapefile, name == 'California')
 ca_counties = filter(us_counties_shapefile, state_name == 'California')
 head(ca_counties)
+
+st_intersection(traffic_shapefile, ca_counties)
+head(traffic_shapefile)
 
 ggplot(ns_routes, aes(Lat_N_or_E, Ahead_AADT %>% as.character() %>% as.numeric(), colour = factor(Route))) + 
   geom_point() + stat_smooth() +
@@ -96,7 +127,10 @@ ggplot(ns_routes, aes(Lat_N_or_E, Ahead_AADT %>% as.character() %>% as.numeric()
 # tmap::qtm(ca_counties)
 
 california_cities = filter(us_cities_shapefile, state_abbr == 'CA')
-big_ca_cities = filter(us_cities_shapefile, state_abbr == 'CA') %>% arrange(-population) %>% head(5)
+big_ca_cities = filter(us_cities_shapefile, state_abbr == 'CA') %>% arrange(-population) %>% head(20)
+
+head(california_cities)
+head(california_cities)
 
 # ggplot() + 
 #   geom_sf(data = california, aes(), size = 1) +
@@ -123,3 +157,17 @@ ca_traffic_hsr = ggplot() +
 
 
 ggsave('ca_traffic_hsr.png', plot = ca_traffic_hsr, height = 8, width = 8, units = 'in', dpi = 400)
+
+
+ggplot() + 
+  geom_sf(data = california, aes(), fill = 'black') +
+  # geom_sf(data = low_ca_house_districts, aes(), fill = 'black') + 
+  geom_sf(data = big_ca_cities, aes(size = population), colour = 'white') +
+  scale_size(guide = F, labels = comma) + 
+  geom_sf(data = leg_districts_in_hsr_route,  aes(colour = NAMELSAD), size = 1) +  
+  scale_colour_hue(guide = F) +
+  scale_alpha(guide = F)
+
+  geom_sf(data = traffic_shapefile %>% filter(!is.na(traffic_quartile)), aes(colour = traffic_quartile, fill = traffic_quartile)) 
+  
+
