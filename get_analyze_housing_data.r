@@ -1,8 +1,19 @@
 
+# to do -- use sqlite as storage to work around download/rate limit issues
+
 library(tidyverse)
 library(fredr)
+library(sqldf)
 
-fredr_set_key('d0b9e64aba30b479343a06037a5a10c1')
+continue_download = T
+clean_existing_data = F
+
+setwd("~/how_we_live/Data")
+
+
+fred_sqlite = dbConnect(SQLite(), dbname= "fred_sqlite.sqlite")
+
+fredr_set_key('0437e7baffc7066bacb86efa56cc37c9')
 
 states_category = 27281
 
@@ -20,7 +31,7 @@ state_categories = fredr_category_children(states_category)
 all_counties_MSAs = lapply(state_categories$id, function(state_id){
   
   state_children = fredr_category_children(state_id)
-  msa_counties = filter(state_children, name %in% c('Counties', 'MSAs'))
+  msa_counties = filter(state_children, name %in% c('Counties', 'MSAs', 'Parishes'))
 }) %>% 
   bind_rows() %>%
   left_join(
@@ -43,7 +54,19 @@ county_substrings = c(
   'Burdened Households'
 )
 
-counties_categories = filter(all_counties_MSAs, name == 'Counties')
+# no counties in puerto rico
+counties_categories = filter(all_counties_MSAs, name %in% c('Counties', 'Parishes'), state != 'Puerto Rico')
+
+if (continue_download) {
+  loaded_states = dbGetQuery(fred_sqlite, "select distinct state_name from us_county_indicators")
+  counties_categories = filter(counties_categories, !state %in% loaded_states$state_name)  
+}
+
+if (clean_existing_data) {
+  dbGetQuery(fred_sqlite, 'drop table us_county_indicators')
+}
+
+# dbSendQuery(fred_sqlite, 'drop table us_county_indicators')
 
 all_states_counties_downloaded = map(1:nrow(counties_categories), function(state_it){
   
@@ -76,7 +99,11 @@ all_states_counties_downloaded = map(1:nrow(counties_categories), function(state
     
     selected_county_series = filter(county_series, title %in% matched_county_series)
     
-    all_series_downloaded = map(selected_county_series$id, fredr_series_observations, frequency = 'a', aggregation_method = 'eop') %>%
+    all_series_downloaded = map(selected_county_series$id, function(x){
+      the_download = fredr_series_observations(x, frequency = 'a', aggregation_method = 'eop')
+      Sys.sleep(0.5) # the fred api complains about rate limit constraints 
+      return(the_download)
+    }) %>%
       bind_rows() %>%
       left_join(
         dplyr::select(selected_county_series, id, title), 
@@ -94,8 +121,6 @@ all_states_counties_downloaded = map(1:nrow(counties_categories), function(state
         by = c('series_id' = 'id')
       )
     
-    Sys.sleep(3)
-    
     setTxtProgressBar(progress_bar, county_it)
     
     return(series_download_clean)
@@ -106,9 +131,11 @@ all_states_counties_downloaded = map(1:nrow(counties_categories), function(state
       state_id = state_id
     )
   
+  dbWriteTable(fred_sqlite, 'us_county_indicators', all_counties_downloaded, append = T)
+  
   close(progress_bar)
   
   return(all_counties_downloaded)
 }) 
 
-
+dbDisconnect(fred_sqlite)
