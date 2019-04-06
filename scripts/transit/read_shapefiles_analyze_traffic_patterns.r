@@ -1,4 +1,7 @@
-
+# 
+# install.packages(c('tidyverse', 'maptools', 'rgeos', 'rgdal', 'ggmap', 'sf', 'USAboundaries', 
+#                    'data.table', 'tmap', 'readxl', 'tigris', 'quantreg', 'xgboost', 'randomForest', 
+#                    'rpart', 'rpart.plot', 'ggdendro', 'plm', 'lmtest', 'scales', 'gridExtra', 'raster'))
 
 library(maptools)
 library(rgeos)
