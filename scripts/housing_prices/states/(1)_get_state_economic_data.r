@@ -78,5 +78,6 @@ all_state_data_downloaded = lapply(1:nrow(state_categories), function(state_it){
   return(all_state_data_stacked)
 })
 
+# get data across the economy
 
-dbDisconnect(fred_sqlite)
+

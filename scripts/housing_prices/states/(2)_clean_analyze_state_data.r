@@ -1,19 +1,22 @@
 
 library(tidyverse)
-# library(reshape2)
+library(reshape2)
 library(data.table)
 library(tigris)
 library(USAboundaries)
 library(sqldf)
 library(corrplot)
 library(randomForest)
+library(plm)
+library(lmtest)
+library(sandwich)
+library(xgboost)
 
 selected_vars = c(
   'Home Vacancy Rate', 'Per Capita Personal Income', 'Real Total Gross Domestic Product',
   'Rental Vacancy Rate', 'Resident Population', 'State Government Tax Collections, Property Taxes',
   'All-Transactions House Price Index', 'New Private Housing Units Authorized by Building Permits'
 )
-filter(state_economic_data, title_clean == 'Real Total Gross Domestic Product') %>% pull(units) %>% unique()
 
 # get shapefile for any plots
 us_states_shapefile = us_states()
@@ -32,14 +35,22 @@ state_economic_data = dbGetQuery(fred_sqlite, 'select * from state_economic_data
   filter(title_clean %in% selected_vars) %>%
   arrange(state_name, title_clean, date)
 
+us_economic_data = dbGetQuery(fred_sqlite, 'select * from us_economic_data') %>%
+  mutate(
+    date = as.Date(date, origin = '1970-01-01'),
+    year = year(date),
+    title_for_col = paste0("x_", str_replace_all(title, '[ \\-%,]', '_'))
+  ) %>%
+  data.table()
+
 dbDisconnect(fred_sqlite)
 
-state_economic_data_dt = data.table(state_economic_data)
 
-# select(state_economic_data, title_clean) %>% unique() %>% View()
-
-lagged_values = state_economic_data_dt[, {
+us_economic_data_lags = us_economic_data[, {
+  
   lagged_value = dplyr::lag(value, 1)
+  lagged2_value = dplyr::lag(value, 2)
+  
   delta = value - lagged_value
   lagged_delta = dplyr::lag(delta, 1)
   pct_change = delta/lagged_value
@@ -48,10 +59,47 @@ lagged_values = state_economic_data_dt[, {
   list(
     date = date, 
     year = year(date),
-    lag_year = lag(year(date), 1),
-    value = value, lagged_value = lagged_value, 
+    lag_year = dplyr::lag(year(date), 1),
+    value = value, lagged_value = lagged_value, lagged2_value = lagged2_value,
     delta = delta, lagged_delta = lagged_delta,
     pct_change = pct_change, lagged_pct_change = lagged_pct_change
+  )
+  
+}, by = list(title, title_for_col)] %>%
+  mutate(
+    year_diff = year - lag_year
+  ) %>% 
+  data.table()
+
+stopifnot(nrow(filter(us_economic_data_lags, year_diff > 1)) == 0)
+
+
+us_economic_data_wide = dcast.data.table(us_economic_data_lags, year ~ title_for_col, 
+                                         value.var = c('value', 'lagged_value', 'lagged2_value', 'delta', 'lagged_delta', 'pct_change', 'lagged_pct_change'))
+
+
+state_economic_data_dt = data.table(state_economic_data)
+
+# select(state_economic_data, title_clean) %>% unique() %>% View()
+
+state_lagged_values = state_economic_data_dt[, {
+  lagged_value = dplyr::lag(value, 1)
+  lagged_value2 = dplyr::lag(value, 2)
+  
+  delta = value - lagged_value
+  lagged_delta = dplyr::lag(delta, 1)
+  
+  pct_change = delta/lagged_value
+  lagged_pct_change = dplyr::lag(pct_change, 1)
+  lagged_pct_change2 = dplyr::lag(pct_change, 2)
+  
+  list(
+    date = date, 
+    year = year(date),
+    lag_year = dplyr::lag(year(date), 1),
+    value = value, lagged_value = lagged_value, lagged_value2 = lagged_value2,
+    delta = delta, lagged_delta = lagged_delta,
+    pct_change = pct_change, lagged_pct_change = lagged_pct_change, lagged_pct_change2=lagged_pct_change2
   )
 }, by = list(state_name, title_clean, title_for_col)] %>%
   mutate(
@@ -60,32 +108,34 @@ lagged_values = state_economic_data_dt[, {
   data.table()
 
 # check the lags to make sure there aren't gaps
-stopifnot(nrow(filter(lagged_values, year_diff > 1)) == 0)
+stopifnot(nrow(filter(state_lagged_values, year_diff > 1)) == 0)
 
-head(lagged_values)
-wide_data = dcast.data.table(lagged_values, state_name + year ~ title_for_col,
-                             value.var = c('value', 'lagged_value', 'delta', 'lagged_delta', 'pct_change', 'lagged_pct_change')) %>%
+state_wide_data = dcast.data.table(state_lagged_values, state_name + year ~ title_for_col,
+                             value.var = c('value', 'lagged_value', 'delta', 'lagged_delta', 
+                                           'pct_change', 'lagged_pct_change', 'lagged_pct_change2', 'lagged_value2')) %>%
   mutate(
     # each variable is in thousands 
     value_prop_tax_per_capita = value_x_State_Government_Tax_Collections__Property_Taxes / (value_x_Resident_Population),
     
     # gdp is in millions, population in thousands
     value_real_gdp_per_capita = value_x_Real_Total_Gross_Domestic_Product * 1000 / value_x_Resident_Population
-  )
+  ) %>%
+  left_join(us_economic_data_wide)
+
+saveRDS(state_wide_data, 'state_wide_data.rds')
 
 # get correlations by calculated value
-values_only = select(wide_data, year, starts_with('value_'))
-pct_change_only = select(wide_data, year, starts_with('pct_change'))
-deltas_only = select(wide_data, year, starts_with('delta_'))
+values_only = select(state_wide_data, year, starts_with('value_'))
+pct_change_only = select(state_wide_data, year, starts_with('pct_change'))
+deltas_only = select(state_wide_data, year, starts_with('delta_'))
+
+
+# select(wide_data, value_x_10_Year_Treasury_Constant_Maturity_Minus_2_Year_Treasury_Constant_Maturity, pct_change_x_Real_Total_Gross_Domestic_Product) %>% na.omit() %>% cor() %>% View()
 
 values_corr = cor(values_only %>% na.omit())
 pct_change_corr = cor(pct_change_only %>% na.omit())
 deltas_corr = cor(deltas_only %>% na.omit())
 write.csv(values_corr, 'values_corr.csv')
-shell('explorer .')
-View(values_corr)
-View(pct_change_corr)
-View(deltas_corr)
 
 # there is a connection between per capita income and rental vacancy rates. 
 # as income goes up, housing prices go up and vacancy rates go down
@@ -154,14 +204,120 @@ training_data = filter(values_only, year <= 2014) %>% na.omit()
 values_logs_interaction_train = lm(log(value_x_All_Transactions_House_Price_Index) ~ log(value_x_Per_Capita_Personal_Income) + log(value_x_Resident_Population) + value_x_Home_Vacancy_Rate * value_x_Rental_Vacancy_Rate + year + log(value_x_Real_Total_Gross_Domestic_Product), data = training_data)
 summary(values_logs_interaction_train)
 
-head(wide_data)
+head(state_wide_data)
 
-full_model = lm(log(value_x_All_Transactions_House_Price_Index) ~ log(lagged_value_x_All_Transactions_House_Price_Index) + log(lagged_value_x_Per_Capita_Personal_Income) + log(lagged_value_x_Resident_Population) + lagged_value_x_Home_Vacancy_Rate * lagged_value_x_Rental_Vacancy_Rate + log(lagged_value_x_Real_Total_Gross_Domestic_Product) + year + state_name, data = wide_data)
-full_model_no_interaction  = lm(log(value_x_All_Transactions_House_Price_Index) ~ log(lagged_value_x_All_Transactions_House_Price_Index) + log(lagged_value_x_Per_Capita_Personal_Income) + log(lagged_value_x_Resident_Population) + lagged_value_x_Home_Vacancy_Rate + lagged_value_x_Rental_Vacancy_Rate + log(lagged_value_x_Real_Total_Gross_Domestic_Product) + year + state_name, data = wide_data)
-coefficients(full_model_no_interaction)
-anova(full_model, full_model_no_interaction) # interaction model doesn't help
-summary(full_model_no_interaction)
+lagged_prices_only = lm(log(value_x_All_Transactions_House_Price_Index) ~ log(lagged_value_x_All_Transactions_House_Price_Index), data = state_wide_data)
+prices_state = lm(log(value_x_All_Transactions_House_Price_Index) ~ log(lagged_value_x_All_Transactions_House_Price_Index) + state_name, data = state_wide_data)
+lagged_prices_state_homevacancy = lm(log(value_x_All_Transactions_House_Price_Index) ~ log(lagged_value_x_All_Transactions_House_Price_Index) + lagged_value_x_Home_Vacancy_Rate + state_name, data = state_wide_data)
+
+full_model = lm(log(value_x_All_Transactions_House_Price_Index) ~ log(lagged_value_x_All_Transactions_House_Price_Index) + log(lagged_value_x_Per_Capita_Personal_Income) + log(lagged_value_x_Resident_Population) + lagged_value_x_Home_Vacancy_Rate * lagged_value_x_Rental_Vacancy_Rate + log(lagged_value_x_Real_Total_Gross_Domestic_Product) + year + state_name, data = state_wide_data)
+full_model_no_interaction  = lm(log(value_x_All_Transactions_House_Price_Index) ~ 
+                                  log(lagged_value_x_All_Transactions_House_Price_Index) + 
+                                  log(lagged_value_x_Per_Capita_Personal_Income) + 
+                                  log(lagged_value_x_Resident_Population) + 
+                                  lagged_value_x_Home_Vacancy_Rate + 
+                                  lagged_value_x_Rental_Vacancy_Rate + 
+                                  log(lagged_value_x_Real_Total_Gross_Domestic_Product) + 
+                                  year + state_name, data = state_wide_data)
+
+full_model_no_int_spreads_1  = lm(log(value_x_All_Transactions_House_Price_Index) ~ 
+                                  log(lagged_value_x_All_Transactions_House_Price_Index) + 
+                                  log(lagged_value_x_Per_Capita_Personal_Income) + 
+                                  log(lagged_value_x_Resident_Population) + 
+                                  lagged_value_x_Home_Vacancy_Rate + 
+                                  lagged_value_x_Rental_Vacancy_Rate + 
+                                  log(lagged_value_x_Real_Total_Gross_Domestic_Product) + 
+                                  lagged_value_x_10_Year_Treasury_Constant_Maturity_Minus_2_Year_Treasury_Constant_Maturity +
+                                  year + state_name, data = state_wide_data)
+
+full_model_no_int_spreads_2  = lm(log(value_x_All_Transactions_House_Price_Index) ~ 
+                                    log(lagged_value_x_All_Transactions_House_Price_Index) + 
+                                    log(lagged_value_x_Per_Capita_Personal_Income) + 
+                                    log(lagged_value_x_Resident_Population) + 
+                                    lagged_value_x_Home_Vacancy_Rate + 
+                                    lagged_value_x_Rental_Vacancy_Rate + 
+                                    log(lagged_value_x_Real_Total_Gross_Domestic_Product) + 
+                                    lagged2_value_x_10_Year_Treasury_Constant_Maturity_Minus_2_Year_Treasury_Constant_Maturity +
+                                    year + state_name, data = state_wide_data)
+
+
+head(state_wide_data)
+summary(full_model_no_int_spreads_2)
+names(state_wide_data)
+
+state_panel_data = pdata.frame(state_wide_data, index = c('state_name', 'year'))
+
+full_model_delta = plm(pct_change_x_All_Transactions_House_Price_Index ~ 
+                        lagged_pct_change_x_All_Transactions_House_Price_Index +
+                        # log(lagged_value_x_All_Transactions_House_Price_Index) +
+                        log(lagged_value_x_Per_Capita_Personal_Income) +
+                        lagged_pct_change_x_Per_Capita_Personal_Income +
+                        lagged_value_x_Home_Vacancy_Rate +
+                        # log(lagged_value_x_Resident_Population) +
+                        lagged_pct_change_x_Resident_Population +
+                        lagged2_value_x_10_Year_Treasury_Constant_Maturity_Minus_2_Year_Treasury_Constant_Maturity +
+                        as.numeric(year)
+                      
+                        , data = state_panel_data, effect = 'individual'
+                        )
+summary(full_model_delta)
+ca = filter(state_panel_data, state_name == 'California')
+ggplot(ca, aes(lagged2_value_x_10_Year_Treasury_Constant_Maturity_Minus_2_Year_Treasury_Constant_Maturity, pct_change_x_Real_Total_Gross_Domestic_Product)) +
+  geom_point() + 
+  stat_smooth()
+ggplot(state_panel_data, aes(lagged2_value_x_10_Year_Treasury_Constant_Maturity_Minus_2_Year_Treasury_Constant_Maturity))
+ggplot(state_wide_data, aes(year, pct_change_x_All_Transactions_House_Price_Index, group = state_name)) + geom_line()
+names(state_wide_data)
+summary(full_model_delta)
+
+head(us_economic_data)
+ggplot(us_economic_data, aes(year, value)) + geom_line()
+ggplot(state_wide_data, aes(lagged_pct_change_x_All_Transactions_House_Price_Index, pct_change_x_All_Transactions_House_Price_Index)) +
+  geom_point()
+
+ggplot(state_wide_data, aes(lagged2_value_x_10_Year_Treasury_Constant_Maturity_Minus_2_Year_Treasury_Constant_Maturity, pct_change_x_Real_Total_Gross_Domestic_Product)) +
+  geom_point() + 
+  stat_smooth()
+
+
+n_distinct(state_wide_data$lagged2_value_x_10_Year_Treasury_Constant_Maturity_Minus_2_Year_Treasury_Constant_Maturity)
+
+hist(state_wide_data$delta_x_All_Transactions_House_Price_Index)
+qqnorm(state_wide_data$delta_x_All_Transactions_House_Price_Index[])
+a = state_wide_data$delta_x_All_Transactions_House_Price_Index
+a[a == 0] = 0.25
+qqnorm(log(a))
+hist(log(a))
+hist(a)
+
+group_by(state_wide_data, spreads_less_one) %>%
+  summarize(
+    mean_growth = mean(pct_change_x_Real_Total_Gross_Domestic_Product, na.rm = T),
+    mean_prices = mean(pct_change_x_All_Transactions_House_Price_Index, na.rm = T)
+  )
+
+
+# lagged spreads in one year doesn't explain prices
+# interaction model doesn't help
+anova(lagged_prices_only, full_model, full_model_no_interaction, full_model_no_int_spreads_1)
+
+# spreads lagged two years help!
+anova(lagged_prices_only, full_model, full_model_no_interaction, full_model_no_int_spreads_2) 
+
+summary(full_model_no_int_spreads_2)
+
+anova_full_model_no_int_spreads_2 = anova(full_model_no_int_spreads_2)
+
+variance_explained_dat = tibble(
+  variable = row.names(anova_full_model_no_int_spreads_2), 
+  r_squared = anova_full_model_no_int_spreads_2$"Sum Sq"/sum(anova_full_model_no_int_spreads_2$"Sum Sq")
+) %>% 
+  arrange(-r_squared)
+
 plot(full_model_no_interaction) # diagnostics look excellent
+
+
+head(state_wide_data)
 
 vars_to_keep = c('value_x_All_Transactions_House_Price_Index', 
                  'lagged_value_x_All_Transactions_House_Price_Index',
@@ -173,12 +329,12 @@ vars_to_keep = c('value_x_All_Transactions_House_Price_Index',
                  'year', 'state_name'
                  )
 split_year = 2004
-training_data = filter(wide_data, year <= split_year)[,vars_to_keep] %>% na.omit()
+training_data = filter(state_wide_data, year <= split_year)[,vars_to_keep] %>% na.omit()
 
-test_data = filter(wide_data, year > split_year)[,vars_to_keep] %>% na.omit()
+test_data = filter(state_wide_data, year > split_year)[,vars_to_keep] %>% na.omit()
 
 # test missingness
-test_data_all_vals = filter(wide_data, year > split_year)[,vars_to_keep]
+test_data_all_vals = filter(state_wide_data, year > split_year)[,vars_to_keep]
 missing_values_by_year = group_by(test_data_all_vals, year) %>% summarize_all(.funs = function(x){sum(is.na(x))})
 
 # per capita personal income and gdp are holding back the model....

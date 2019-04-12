@@ -46,3 +46,18 @@
 ## References
 
 * [Coordinate reference systems](https://www.nceas.ucsb.edu/~frazier/RSpatialGuides/OverviewCoordinateReferenceSystems.pdf)
+
+
+## Papers
+
+### Housing 
+* [The Price and Quantity of Residential Land in the United States](https://www.federalreserve.gov/pubs/feds/2004/200437/200437pap.pdf)
+- Finally, we show for the US data that the logarithms of the nominal price index for residential land, disposable income, and interest rates are cointegrated.
+
+* [The Major Challenge of Inadequate U.S. Housing Supply](http://www.freddiemac.com/research/insight/20181205_major_challenge_to_u.s._housing_supply.page?)
+
+* [The State of the Nation's Housing](https://www.jchs.harvard.edu/sites/default/files/harvard_jchs_state_of_the_nations_housing_2017.pdf)
+
+### Panel Data Econometrics
+
+* [Dynamic Panel Models: A guide to micro data methods and practice](http://www.cemmap.ac.uk/wps/cwp0209.pdf)

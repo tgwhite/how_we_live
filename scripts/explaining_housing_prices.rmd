@@ -1,0 +1,153 @@
+---
+title: "Explaining Housing Prices"
+author: "Taylor G. White"
+date: "April 12, 2019"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, dpi = 400)
+
+library(stargazer)
+library(tidyverse)
+library(reshape2)
+library(data.table)
+library(tigris)
+library(USAboundaries)
+library(sqldf)
+library(corrplot)
+library(randomForest)
+library(plm)
+library(lmtest)
+library(sandwich)
+library(xgboost)
+
+state_wide_data <- readRDS("~/how_we_live/data/state_wide_data.rds")
+
+# use plm to hide state fixed effects in coefficients and for other methods
+
+```
+
+```{r plots}
+
+selected_vars_only = select(
+  state_wide_data,
+  state_name,
+  pct_change_x_All_Transactions_House_Price_Index,
+  lagged_pct_change2_x_All_Transactions_House_Price_Index,
+  lagged_pct_change_x_All_Transactions_House_Price_Index,
+  lagged_value_x_Per_Capita_Personal_Income,
+  lagged_pct_change_x_Per_Capita_Personal_Income,
+  lagged_pct_change_x_Resident_Population,
+  lagged_value_x_Resident_Population,
+  lagged_value_x_Home_Vacancy_Rate,
+  lagged_value_x_Rental_Vacancy_Rate,
+  lagged_value_x_Real_Total_Gross_Domestic_Product,
+  lagged2_value_x_10_Year_Treasury_Constant_Maturity_Minus_2_Year_Treasury_Constant_Maturity,
+  year
+  ) %>% na.omit()
+
+selected_vars_long = melt(selected_vars_only, id = c('state_name', 'year', 'pct_change_x_All_Transactions_House_Price_Index'))
+table(selected_vars_long$year)
+
+ggplot(selected_vars_long, aes(year, pct_change_x_All_Transactions_House_Price_Index, group = state_name)) +
+  geom_line() 
+
+
+ggplot(selected_vars_long, aes(value, pct_change_x_All_Transactions_House_Price_Index)) +
+  facet_wrap(~variable, scales = 'free', ncol = 3) +
+  geom_point() +
+  stat_smooth(method = 'lm')
+
+
+
+```
+
+
+
+```{r models, results = 'asis'}
+
+state_panel = pdata.frame(selected_vars_only, index = c('state_name', 'year'))
+
+# cor(selected_vars_only %>% select(-state_name)) %>% View()
+
+lagged_price_change_only = plm(
+  pct_change_x_All_Transactions_House_Price_Index ~ 
+    lagged_pct_change_x_All_Transactions_House_Price_Index,
+  data = state_panel, model = 'pooling'
+)
+
+lagged2_price_change = plm(
+  pct_change_x_All_Transactions_House_Price_Index ~ 
+    lagged_pct_change2_x_All_Transactions_House_Price_Index,
+  data = state_panel, model = 'pooling'
+)
+
+
+full_model_pct_change_no_dynamics = plm(
+  pct_change_x_All_Transactions_House_Price_Index ~ 
+  log(lagged_value_x_Per_Capita_Personal_Income) +
+  lagged_pct_change_x_Per_Capita_Personal_Income +
+  lagged_value_x_Home_Vacancy_Rate +
+  lagged_pct_change_x_Resident_Population +
+  lagged2_value_x_10_Year_Treasury_Constant_Maturity_Minus_2_Year_Treasury_Constant_Maturity +
+  as.numeric(year), 
+  data = state_panel, 
+  effect = 'individual'
+)
+
+full_model_pct_change = plm(
+  pct_change_x_All_Transactions_House_Price_Index ~ 
+  lagged_pct_change2_x_All_Transactions_House_Price_Index +
+  log(lagged_value_x_Per_Capita_Personal_Income) +
+  lagged_pct_change_x_Per_Capita_Personal_Income +
+  lagged_value_x_Home_Vacancy_Rate +
+  lagged_pct_change_x_Resident_Population +
+  lagged2_value_x_10_Year_Treasury_Constant_Maturity_Minus_2_Year_Treasury_Constant_Maturity +
+  as.numeric(year), 
+  data = state_panel, 
+  effect = 'individual'
+)
+
+# plot(predict(full_model_pct_change), residuals(full_model_pct_change))
+
+# coeftest(simple_model_fe, vcov = vcovHC)
+
+stargazer(lagged_price_change_only, 
+          full_model_pct_change_no_dynamics, 
+          full_model_pct_change,
+          covariate.labels = c(
+            'Pct. Chg. Housing Prices, Last Year',
+            'Pct. Chg. Housing Prices, Two Years Ago',
+            'Log Per Capita Income, Last Year',
+            'Pct. Chg. Per Capita Income, Last Year',
+            'Home Vacancy Rate, Last Year',
+            'Pct. Chg. Population, Last Year',
+            'Interest Rate Spread, Two Years Ago',
+            'Time Trend', 'Intercept'
+          ),
+  omit.stat = 'f',
+  # report = "vct*",
+  # report = "vct*",
+  ci = TRUE,
+  header=FALSE,
+  title = 'Modeling Changes in Housing Prices, U.S. States 1998-2017',
+  column.labels = c("OLS", "State FE", "State FE"),
+  dep.var.caption  = 'Pct. Chg. Housing Prices',
+  dep.var.labels.include = FALSE
+  # dep.var.labels = c('Pct. Chg. Housing Prices'),
+        )
+
+          
+          # dep.var.labels = c('% Change Housing Prices'),
+          # omit.stat = 'f',
+          # title = 'Predicting Housing Price levels'
+          # )
+
+
+```
+
+
